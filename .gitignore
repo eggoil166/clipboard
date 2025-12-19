@@ -1,0 +1,4 @@
+/target
+Cargo.lock
+clipboard.db
+.cargo
