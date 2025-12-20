@@ -82,14 +82,14 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_latest_clips(&self, limit: i32) -> rusqlite::Result<Vec<ClipSummary>> {
+    pub fn get_latest_clips(&self, limit: i32, offset: i32) -> rusqlite::Result<Vec<ClipSummary>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, timestamp, owner_process_name, foreground_window_title, content_hash,
             (SELECT data FROM formats WHERE clip_id = clips.id AND (format_id = 13 OR format_id = 1) LIMIT 1) as preview
-            FROM clips ORDER BY timestamp DESC LIMIT ?"
+            FROM clips ORDER BY timestamp DESC LIMIT ? OFFSET ?"
         )?;
 
-        let rows = stmt.query_map([limit], |row| {
+        let rows = stmt.query_map([limit, offset], |row| {
             let raw_data: Option<Vec<u8>> = row.get(5)?;
             let preview = match raw_data {
                 Some(bytes) => {
@@ -116,6 +116,10 @@ impl Database {
         let mut clips = Vec::new();
         for clip in rows { clips.push(clip?); }
         Ok(clips)
+    }
+
+    pub fn get_total_count(&self) -> Result<i32> {
+        self.conn.query_row("SELECT COUNT(*) FROM clips", [], |r| r.get(0))
     }
 
     pub fn get_clip_payloads(&self, hash: &str) -> Result<Vec<ClipboardPayload>> {

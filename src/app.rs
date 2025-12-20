@@ -6,6 +6,9 @@ use crate::{OpenClipboard, HWND, EmptyClipboard, GlobalAlloc, GMEM_MOVEABLE, Glo
 pub struct App {
     history: Vec<ClipSummary>,
     db_path: String,
+    current_page: i32,
+    items_per_page: i32,
+    total_count: i32,
 }
 
 impl App {
@@ -13,6 +16,9 @@ impl App {
         let mut app = Self {
             history: Vec::new(),
             db_path: "clipboard.db".to_string(),
+            current_page: 0,
+            items_per_page: 20,
+            total_count: 0,
         };
 
         app.refresh_history();
@@ -21,7 +27,13 @@ impl App {
 
     pub fn refresh_history(&mut self) {
         if let Ok(db) = Database::new(&self.db_path, "pwd") {
-            if let Ok(latest) = db.get_latest_clips(20) {
+            self.total_count = db.get_total_count().unwrap_or(0);
+            let max_pages = (self.total_count as f32 / self.items_per_page as f32).ceil() as i32;
+            if self.current_page >= max_pages && max_pages > 0 {
+                self.current_page = max_pages - 1;
+            }
+            let offset = self.current_page * self.items_per_page;
+            if let Ok(latest) = db.get_latest_clips(self.items_per_page, offset) {
                 self.history = latest;
             }
         }
@@ -63,14 +75,19 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut restore_hash: Option<String> = None;
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("History");
-            if ui.button("Refresh").clicked() {
-                self.refresh_history();
-            }
+            ui.horizontal(|ui| {
+                ui.heading("History");
+                if ui.button("Refresh").clicked() {
+                    self.refresh_history();
+                }
+            });
 
             ui.separator();
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
+            egui::ScrollArea::vertical()
+            .id_source("clip_scroll")
+            .max_height(ui.available_height() - 40.0)
+            .show(ui, |ui| {
                 for clip in &self.history {
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
@@ -84,6 +101,31 @@ impl eframe::App for App {
                         }
                     });
                 }
+            });
+            
+            ui.separator();
+
+            ui.horizontal(|ui| {
+                if ui.button("prev").clicked() && self.current_page > 0 {
+                    self.current_page -= 1;
+                    self.refresh_history();
+                }
+
+                let total_pages = (self.total_count as f32 / self.items_per_page as f32).ceil() as i32;
+
+                ui.label(format!(
+                    "{} of {}",
+                    if total_pages == 0 { 0 } else { self.current_page + 1 },
+                    total_pages
+                ));
+
+                let has_next = (self.current_page + 1) < total_pages;
+                if ui.add_enabled(has_next, egui::Button::new("next")).clicked() {
+                    self.current_page += 1;
+                    self.refresh_history();
+                }
+
+                ui.weak(format!("(history size: {})", self.total_count));
             });
         });
 
