@@ -84,13 +84,13 @@ impl Database {
 
     pub fn get_latest_clips(&self, limit: i32) -> rusqlite::Result<Vec<ClipSummary>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, timestamp, owner_process_name, foreground_window_title,
+            "SELECT id, timestamp, owner_process_name, foreground_window_title, content_hash,
             (SELECT data FROM formats WHERE clip_id = clips.id AND (format_id = 13 OR format_id = 1) LIMIT 1) as preview
             FROM clips ORDER BY timestamp DESC LIMIT ?"
         )?;
 
         let rows = stmt.query_map([limit], |row| {
-            let raw_data: Option<Vec<u8>> = row.get(4)?;
+            let raw_data: Option<Vec<u8>> = row.get(5)?;
             let preview = match raw_data {
                 Some(bytes) => {
                     if let Ok(utf16_str) = String::from_utf16(&bytes.chunks_exact(2)
@@ -105,10 +105,10 @@ impl Database {
             };
 
             Ok(ClipSummary {
-                id: row.get(0)?,
                 timestamp: row.get(1)?,
                 owner: row.get(2)?,
                 fg_title: row.get(3)?,
+                hash: row.get(4)?,
                 preview,
             })
         })?;
@@ -116,5 +116,24 @@ impl Database {
         let mut clips = Vec::new();
         for clip in rows { clips.push(clip?); }
         Ok(clips)
+    }
+
+    pub fn get_clip_payloads(&self, hash: &str) -> Result<Vec<ClipboardPayload>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT format_id, format_name, data
+            FROM formats
+            WHERE clip_id = (SELECT id FROM clips WHERE content_hash = ?)
+            ORDER BY format_id"
+        )?;
+        let payloads = stmt.query_map([hash], |row| {
+            Ok(ClipboardPayload {
+                format_id: row.get(0)?,
+                format_name: row.get(1)?,
+                data: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(payloads)
     }
 }

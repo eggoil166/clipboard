@@ -13,9 +13,9 @@ pub struct ClipboardMsg {
 }
 
 pub struct ClipSummary {
-    pub id: i64,
     pub timestamp: String,
     pub owner: String,
     pub fg_title: String,
     pub preview: String,
+    pub hash: String,
 }

@@ -1,8 +1,10 @@
 mod storage;
 mod models;
+mod app;
 
 use storage::Database;
-use models::{ClipboardPayload, ClipboardMsg, ClipSummary};
+use models::{ClipboardPayload, ClipboardMsg};
+use app::App;
 
 use windows::{
     core::*,
@@ -19,61 +21,7 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
 
-use eframe::egui;
-
 static TX: OnceLock<Sender<ClipboardMsg>> = OnceLock::new();
-
-struct App {
-    history: Vec<ClipSummary>,
-    db_path: String,
-}
-
-impl App {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        Self {
-            history: Vec::new(),
-            db_path: "clipboard.db".to_string(),
-        }
-    }
-
-    fn refresh_history(&mut self) {
-        if let Ok(db) = Database::new(&self.db_path, "pwd") {
-            if let Ok(latest) = db.get_latest_clips(20) {
-                self.history = latest;
-            }
-        }
-    }
-}
-
-impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("History");
-            if ui.button("Refresh").clicked() {
-                self.refresh_history();
-            }
-
-            ui.separator();
-
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for clip in &self.history {
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&clip.owner).strong());
-                            ui.label(egui::RichText::new(&clip.fg_title).strong());
-                            ui.label(&clip.timestamp);
-                        });
-                        ui.label(&clip.preview);
-                        if ui.button("Restore").clicked() {
-
-                        }
-                    });
-                }
-            });
-        });
-        ctx.request_repaint_after(std::time::Duration::from_secs(1));
-    }
-}
 
 unsafe fn get_clipboard_source() -> String {
     let owner_hwnd = GetClipboardOwner();
@@ -251,7 +199,7 @@ fn main() -> Result<()> {
         "Clip",
         native_options,
         Box::new(|cc| Box::new(App::new(cc))),
-    );
+    ).expect("eframe failure");
 
     Ok(())
 }
