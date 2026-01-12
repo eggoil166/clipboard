@@ -39,10 +39,21 @@ impl App {
         }
     }
 
+    pub fn clear_history(&mut self) {
+        if let Ok(db) = Database::new(&self.db_path, "pwd") {
+            if let Ok(_) = db.clear_all_clips() {
+                self.current_page = 0;
+                self.refresh_history();
+                println!("history cleared");
+            }
+        }
+    }
+
     pub fn restore_clip(&mut self, hash: &str) {
         if let Ok(db) = Database::new(&self.db_path, "pwd") {
             if let Ok(payloads) = db.get_clip_payloads(hash) {
                 unsafe {
+                    crate::set_restoring(true);
                     if OpenClipboard(HWND(0)).is_ok() {
                         let _ = EmptyClipboard();
 
@@ -56,7 +67,7 @@ impl App {
                                     ptr as *mut u8,
                                     payload.data.len(),
                                 );
-                                GlobalUnlock(hglobal).expect("thread unlock issue");
+                                let _ = GlobalUnlock(hglobal);
 
                                 let _ = SetClipboardData(payload.format_id, HANDLE(hglobal.0 as isize));
                             }
@@ -65,6 +76,7 @@ impl App {
 
                         println!("restored from {}", hash);
                     }
+                    crate::set_restoring(false);
                 }
             }
         }
@@ -79,6 +91,12 @@ impl eframe::App for App {
                 ui.heading("History");
                 if ui.button("Refresh").clicked() {
                     self.refresh_history();
+                }
+                if ui.button("Hide").clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
+                if ui.button("Clear All").clicked() {
+                    self.clear_history();
                 }
             });
 

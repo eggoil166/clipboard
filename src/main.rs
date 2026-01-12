@@ -20,8 +20,10 @@ use windows::{
 use std::sync::OnceLock;
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 static TX: OnceLock<Sender<ClipboardMsg>> = OnceLock::new();
+static RESTORING: AtomicBool = AtomicBool::new(false);
 
 unsafe fn get_clipboard_source() -> String {
     let owner_hwnd = GetClipboardOwner();
@@ -44,7 +46,12 @@ unsafe fn get_clipboard_source() -> String {
     "Unknown Process".to_string()
 }
 
+pub fn set_restoring(value: bool) {
+    RESTORING.store(value, Ordering::Relaxed);
+}
+
 unsafe fn process_clipboard_update(hwnd: HWND) {
+    if RESTORING.load(Ordering::Relaxed) { return; }
     if OpenClipboard(hwnd).is_err() { return; }
 
     let source_app = get_clipboard_source();

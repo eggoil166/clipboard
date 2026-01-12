@@ -14,6 +14,7 @@ windows = { version = "0.54", features = [
   "Win32_System_Memory",
   "Win32_System_Ole",
   "Win32_Graphics_Gdi",
+  "Win32_UI_Input_KeyboardAndMouse",
 ] }
 secrecy = "0.8"
 rusqlite = { version = "0.37", features = ["bundled-sqlcipher"]}

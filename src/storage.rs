@@ -140,4 +140,19 @@ impl Database {
 
         Ok(payloads)
     }
+
+    pub fn clear_all_clips(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM clips", [])?;
+        self.conn.execute("DELETE FROM sqlite_sequence WHERE name='formats'", [])?;
+        self.conn.execute("DELETE FROM sqlite_sequence WHERE name='clips'", [])?;
+        Ok(())
+    }
+
+    pub fn delete_clip_by_hash(&self, hash: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM clips WHERE content_hash = ?",
+            [hash],
+        )?;
+        Ok(())
+    }
 }
