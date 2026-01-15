@@ -10,20 +10,28 @@ use windows::{
     core::*,
     Win32::Foundation::*,
     Win32::System::LibraryLoader::*,
-    Win32::UI::WindowsAndMessaging::*,
+    Win32::UI::{
+        WindowsAndMessaging::*,
+        Input::KeyboardAndMouse::{RegisterHotKey, MOD_ALT, MOD_CONTROL, VK_C},
+    },
     Win32::System::Threading::*,
     Win32::System::ProcessStatus::*,
     Win32::System::DataExchange::*,
     Win32::System::Memory::*,
 };
 
-use std::sync::OnceLock;
+use std::sync::{OnceLock, Arc};
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use eframe::egui;
+
 static TX: OnceLock<Sender<ClipboardMsg>> = OnceLock::new();
 static RESTORING: AtomicBool = AtomicBool::new(false);
+static VISIBLE: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+const HOTKEY_ID: i32 = 1;
+static EGUI_CTX: OnceLock<egui::Context> = OnceLock::new();
 
 unsafe fn get_clipboard_source() -> String {
     let owner_hwnd = GetClipboardOwner();
@@ -133,6 +141,31 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_HOTKEY => {
+            if wparam.0 == HOTKEY_ID as usize {
+                println!("hotkey");
+                if let Some(visible) = VISIBLE.get() {
+                    println!("switching bool");
+                    let currently_visible = visible.load(Ordering::Relaxed);
+                    visible.store(!currently_visible, Ordering::Relaxed);
+                    let title: Vec<u16> = "Clip".encode_utf16().chain(std::iter::once(0)).collect();
+                    let main_hwnd = FindWindowW(None, PCWSTR(title.as_ptr()));
+                    if main_hwnd.0 != 0 {
+                        if !currently_visible {
+                            ShowWindow(main_hwnd, SW_SHOW);
+                            SetForegroundWindow(main_hwnd);
+                        } else {
+                            ShowWindow(main_hwnd, SW_HIDE);
+                        }
+                    }
+
+                    if let Some(ctx) = EGUI_CTX.get() {
+                        ctx.request_repaint();
+                    }
+                }
+            }
+            LRESULT(0)
+        }
         WM_DESTROY => {
             PostQuitMessage(0);
             LRESULT(0)
@@ -148,6 +181,9 @@ unsafe extern "system" fn wnd_proc(
 fn main() -> Result<()> {
     let (tx, rx) = channel::<ClipboardMsg>();
     TX.set(tx).map_err(|_| Error::from(HRESULT(0))).unwrap();
+
+    let visible = Arc::new(AtomicBool::new(true));
+    VISIBLE.set(visible.clone()).unwrap();
 
     thread::spawn(move || {
         let db = Database::new("clipboard.db", "pwd").expect("Failed to init DB");
@@ -191,7 +227,14 @@ fn main() -> Result<()> {
                 None,
             );
 
-            AddClipboardFormatListener(_hwnd).expect("Failed");
+            AddClipboardFormatListener(_hwnd).expect("failed to add clipboard listener");
+
+            RegisterHotKey(
+                _hwnd,
+                HOTKEY_ID,
+                MOD_CONTROL | MOD_ALT,
+                VK_C.0 as u32,
+            ).expect("failed to register hotkey");
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND(0), 0, 0).into() {
@@ -205,7 +248,7 @@ fn main() -> Result<()> {
     eframe::run_native(
         "Clip",
         native_options,
-        Box::new(|cc| Box::new(App::new(cc))),
+        Box::new(|cc| Box::new(App::new(cc, visible))),
     ).expect("eframe failure");
 
     Ok(())

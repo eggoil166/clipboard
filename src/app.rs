@@ -9,16 +9,24 @@ pub struct App {
     current_page: i32,
     items_per_page: i32,
     total_count: i32,
+    visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    last_visible: bool,
 }
 
 impl App {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(
+        _cc: &eframe::CreationContext<'_>,
+        visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        let _ = crate::EGUI_CTX.set(_cc.egui_ctx.clone());
         let mut app = Self {
             history: Vec::new(),
             db_path: "clipboard.db".to_string(),
             current_page: 0,
             items_per_page: 20,
             total_count: 0,
+            visible,
+            last_visible: true,
         };
 
         app.refresh_history();
@@ -45,6 +53,15 @@ impl App {
                 self.current_page = 0;
                 self.refresh_history();
                 println!("history cleared");
+            }
+        }
+    }
+
+    pub fn delete_single(&mut self, hash: &str) {
+        if let Ok(db) = Database::new(&self.db_path, "pwd") {
+            if let Ok(_) = db.delete_clip_by_hash(hash) {
+                self.refresh_history();
+                println!("deleted clip {}", hash);
             }
         }
     }
@@ -86,6 +103,13 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut restore_hash: Option<String> = None;
+        let visible_clone = self.visible.clone();
+        let cur = self.visible.load(std::sync::atomic::Ordering::Relaxed);
+        if self.last_visible != cur {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(cur));
+            self.last_visible = cur;
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("History");
@@ -93,7 +117,7 @@ impl eframe::App for App {
                     self.refresh_history();
                 }
                 if ui.button("Hide").clicked() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    visible_clone.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
                 if ui.button("Clear All").clicked() {
                     self.clear_history();
