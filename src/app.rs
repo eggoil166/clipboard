@@ -102,7 +102,9 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.refresh_history();
         let mut restore_hash: Option<String> = None;
+        let mut delete_hash: Option<String> = None;
         let visible_clone = self.visible.clone();
         let cur = self.visible.load(std::sync::atomic::Ordering::Relaxed);
         if self.last_visible != cur {
@@ -113,14 +115,12 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("History");
-                if ui.button("Refresh").clicked() {
-                    self.refresh_history();
-                }
                 if ui.button("Hide").clicked() {
                     visible_clone.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
                 if ui.button("Clear All").clicked() {
                     self.clear_history();
+                    self.refresh_history();
                 }
             });
 
@@ -140,6 +140,9 @@ impl eframe::App for App {
                         ui.label(&clip.preview);
                         if ui.button("Restore").clicked() {
                             restore_hash = Some(clip.hash.clone());
+                        }
+                        if ui.button("Delete").clicked() {
+                            delete_hash = Some(clip.hash.clone());
                         }
                     });
                 }
@@ -173,6 +176,10 @@ impl eframe::App for App {
 
         if let Some(hash) = restore_hash {
             self.restore_clip(&hash);
+        }
+
+        if let Some(hash) = delete_hash {
+            self.delete_single(&hash);
         }
 
         ctx.request_repaint_after(std::time::Duration::from_secs(1));

@@ -172,6 +172,9 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_CLIPBOARDUPDATE => {
             process_clipboard_update(hwnd);
+            if let Some(ctx) = EGUI_CTX.get() {
+                ctx.request_repaint();
+            }
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
