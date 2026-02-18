@@ -1,17 +1,25 @@
 use rusqlite::{params, Connection, Result};
-
-use crate::models::{ ClipboardPayload, ClipSummary };
+use crate::models::{ClipboardPayload, ClipSummary};
 
 pub struct Database {
     conn: Connection,
 }
 
+fn apply_cipher_pragmas(conn: &Connection, password: &str) -> Result<()> {
+    conn.pragma_update(None, "key", password)?;
+    conn.pragma_update(None, "kdf_iter", 256000)?;
+    conn.pragma_update(None, "cipher_page_size", 4096)?;
+    conn.pragma_update(None, "cipher_memory_security", true)?;
+    conn.pragma_update(None, "cipher_hmac_algorithm", "HMAC_SHA512")?;
+    conn.pragma_update(None, "cipher_kdf_algorithm", "PBKDF2_HMAC_SHA512")?;
+    conn.pragma_update(None, "foreign_keys", true)?;
+    Ok(())
+}
+
 impl Database {
     pub fn new(path: &str, password: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
-        conn.pragma_update(None, "key", password)?;
-        conn.execute("PRAGMA foreign_keys = ON;", [])?;
-
+        apply_cipher_pragmas(&conn, password)?;
         let db = Database { conn };
         db.create_tables()?;
         Ok(db)
@@ -21,7 +29,7 @@ impl Database {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS clips (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                owner_process_name TEXT, 
+                owner_process_name TEXT,
                 foreground_window_title TEXT,
                 exe_path TEXT,
                 content_hash TEXT,
@@ -30,12 +38,11 @@ impl Database {
             )",
             [],
         )?;
-
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS formats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 clip_id INTEGER,
-                format_id INTEGER,  
+                format_id INTEGER,
                 format_name TEXT,
                 data BLOB,
                 FOREIGN KEY(clip_id) REFERENCES clips(id) ON DELETE CASCADE
@@ -46,29 +53,29 @@ impl Database {
     }
 
     pub fn save_snapshot(
-        &self, 
+        &self,
         owner_name: &str,
         fg_title: &str,
         exe_path: &str,
         hash: &str,
-        payloads: Vec<ClipboardPayload>
+        payloads: Vec<ClipboardPayload>,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
 
         let exists: u32 = tx.query_row(
-            "SELECT COUNT(1) FROM clips WHERE content_hash = ?", 
-            [hash], 
-            |r| r.get(0)
+            "SELECT COUNT(1) FROM clips WHERE content_hash = ?",
+            [hash],
+            |r| r.get(0),
         )?;
-
-        if exists > 0 { return Ok(()); }
+        if exists > 0 {
+            return Ok(());
+        }
 
         tx.execute(
-            "INSERT INTO clips (owner_process_name, foreground_window_title, exe_path, content_hash) 
+            "INSERT INTO clips (owner_process_name, foreground_window_title, exe_path, content_hash)
              VALUES (?, ?, ?, ?)",
             params![owner_name, fg_title, exe_path, hash],
         )?;
-        
         let clip_id = tx.last_insert_rowid();
 
         for p in payloads {
@@ -82,28 +89,33 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_latest_clips(&self, limit: i32, offset: i32) -> rusqlite::Result<Vec<ClipSummary>> {
+    pub fn get_latest_clips(&self, limit: i32, offset: i32) -> Result<Vec<ClipSummary>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, timestamp, owner_process_name, foreground_window_title, content_hash,
-            (SELECT data FROM formats WHERE clip_id = clips.id AND (format_id = 13 OR format_id = 1) LIMIT 1) as preview
-            FROM clips ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+             (SELECT data FROM formats WHERE clip_id = clips.id AND (format_id = 13 OR format_id = 1) LIMIT 1) as preview
+             FROM clips ORDER BY timestamp DESC LIMIT ? OFFSET ?"
         )?;
 
         let rows = stmt.query_map([limit, offset], |row| {
             let raw_data: Option<Vec<u8>> = row.get(5)?;
             let preview = match raw_data {
                 Some(bytes) => {
-                    if let Ok(utf16_str) = String::from_utf16(&bytes.chunks_exact(2)
-                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                        .collect::<Vec<u16>>()) {
-                        utf16_str.chars().take(50).collect()
+                    if bytes.len() >= 2 {
+                        let utf16: Vec<u16> = bytes
+                            .chunks_exact(2)
+                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                            .collect();
+                        if let Ok(s) = String::from_utf16(&utf16) {
+                            s.chars().take(80).collect()
+                        } else {
+                            String::from_utf8_lossy(&bytes).chars().take(80).collect()
+                        }
                     } else {
-                        String::from_utf8_lossy(&bytes).chars().take(50).collect()
+                        String::from_utf8_lossy(&bytes).chars().take(80).collect()
                     }
                 }
-                None => "bins".to_string(),
+                None => "[ binary ]".to_string(),
             };
-
             Ok(ClipSummary {
                 timestamp: row.get(1)?,
                 owner: row.get(2)?,
@@ -114,7 +126,9 @@ impl Database {
         })?;
 
         let mut clips = Vec::new();
-        for clip in rows { clips.push(clip?); }
+        for clip in rows {
+            clips.push(clip?);
+        }
         Ok(clips)
     }
 
@@ -125,20 +139,28 @@ impl Database {
     pub fn get_clip_payloads(&self, hash: &str) -> Result<Vec<ClipboardPayload>> {
         let mut stmt = self.conn.prepare(
             "SELECT format_id, format_name, data
-            FROM formats
-            WHERE clip_id = (SELECT id FROM clips WHERE content_hash = ?)
-            ORDER BY format_id"
+             FROM formats
+             WHERE clip_id = (SELECT id FROM clips WHERE content_hash = ?)
+             ORDER BY format_id",
         )?;
-        let payloads = stmt.query_map([hash], |row| {
-            Ok(ClipboardPayload {
-                format_id: row.get(0)?,
-                format_name: row.get(1)?,
-                data: row.get(2)?,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
+        let payloads = stmt
+            .query_map([hash], |row| {
+                Ok(ClipboardPayload {
+                    format_id: row.get(0)?,
+                    format_name: row.get(1)?,
+                    data: row.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(payloads)
+    }
+
+    pub fn get_clip_meta(&self, hash: &str) -> Result<(String, String, String)> {
+        self.conn.query_row(
+            "SELECT owner_process_name, foreground_window_title, exe_path FROM clips WHERE content_hash = ?",
+            [hash],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
     }
 
     pub fn clear_all_clips(&self) -> Result<()> {
@@ -149,10 +171,7 @@ impl Database {
     }
 
     pub fn delete_clip_by_hash(&self, hash: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM clips WHERE content_hash = ?",
-            [hash],
-        )?;
+        self.conn.execute("DELETE FROM clips WHERE content_hash = ?", [hash])?;
         Ok(())
     }
 }

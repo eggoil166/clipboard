@@ -20,3 +20,4 @@ secrecy = "0.8"
 rusqlite = { version = "0.37", features = ["bundled-sqlcipher"]}
 eframe = "0.27.0"
 chrono = "0.4"
+blake3 = "1.8.3"

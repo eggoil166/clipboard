@@ -1,4 +1,5 @@
 mod storage;
+mod cloudstorage;
 mod models;
 mod app;
 
@@ -30,6 +31,7 @@ use eframe::egui;
 static TX: OnceLock<Sender<ClipboardMsg>> = OnceLock::new();
 static RESTORING: AtomicBool = AtomicBool::new(false);
 static VISIBLE: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+static NEEDS_REFRESH: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 const HOTKEY_ID: i32 = 1;
 static EGUI_CTX: OnceLock<egui::Context> = OnceLock::new();
 
@@ -58,12 +60,16 @@ pub fn set_restoring(value: bool) {
     RESTORING.store(value, Ordering::Relaxed);
 }
 
+pub fn is_restoring() -> bool {
+    RESTORING.load(Ordering::Relaxed)
+}
+
 unsafe fn process_clipboard_update(hwnd: HWND) {
     if RESTORING.load(Ordering::Relaxed) { return; }
     if OpenClipboard(hwnd).is_err() { return; }
 
     let source_app = get_clipboard_source();
-    
+
     let mut title_buffer = [0u16; 512];
     let fg_hwnd = GetForegroundWindow();
     let len = GetWindowTextW(fg_hwnd, &mut title_buffer);
@@ -88,20 +94,15 @@ unsafe fn process_clipboard_update(hwnd: HWND) {
                     String::from_utf16_lossy(&name_buf[..name_len as usize])
                 } else {
                     match format {
-                        1 => "CF_TEXT".to_string(),
-                        2 => "CF_BITMAP".to_string(),
+                        1  => "CF_TEXT".to_string(),
+                        2  => "CF_BITMAP".to_string(),
                         13 => "CF_UNICODETEXT".to_string(),
                         15 => "CF_HDROP".to_string(),
-                        _ => format!("ID_{}", format),
+                        _  => format!("ID_{}", format),
                     }
                 };
 
-                payloads.push(ClipboardPayload {
-                    format_id: format,
-                    format_name,
-                    data,
-                });
-
+                payloads.push(ClipboardPayload { format_id: format, format_name, data });
                 let _ = GlobalUnlock(hglobal);
             }
         }
@@ -110,17 +111,13 @@ unsafe fn process_clipboard_update(hwnd: HWND) {
 
     let _ = CloseClipboard();
 
-    if let Some(primary) = payloads.get(0) {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        
-        let mut hasher = DefaultHasher::new();
-        primary.data.hash(&mut hasher);
-        let hash = format!("{:x}", hasher.finish());
+    if let Some(primary) = payloads.first() {
+        // blake3 gives a stable, collision-resistant hash
+        let hash = blake3::hash(&primary.data).to_hex().to_string();
 
         let msg = ClipboardMsg {
             owner: source_app,
-            fg_title: fg_title,
+            fg_title,
             exe_path: "UnknownPath".to_string(),
             hash,
             payloads,
@@ -143,11 +140,10 @@ unsafe extern "system" fn wnd_proc(
     match msg {
         WM_HOTKEY => {
             if wparam.0 == HOTKEY_ID as usize {
-                println!("hotkey");
                 if let Some(visible) = VISIBLE.get() {
-                    println!("switching bool");
                     let currently_visible = visible.load(Ordering::Relaxed);
                     visible.store(!currently_visible, Ordering::Relaxed);
+
                     let title: Vec<u16> = "Clip".encode_utf16().chain(std::iter::once(0)).collect();
                     let main_hwnd = FindWindowW(None, PCWSTR(title.as_ptr()));
                     if main_hwnd.0 != 0 {
@@ -172,6 +168,10 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_CLIPBOARDUPDATE => {
             process_clipboard_update(hwnd);
+            // Signal the UI to refresh history on the next frame
+            if let Some(flag) = NEEDS_REFRESH.get() {
+                flag.store(true, Ordering::Relaxed);
+            }
             if let Some(ctx) = EGUI_CTX.get() {
                 ctx.request_repaint();
             }
@@ -188,9 +188,11 @@ fn main() -> Result<()> {
     let visible = Arc::new(AtomicBool::new(true));
     VISIBLE.set(visible.clone()).unwrap();
 
+    let needs_refresh = Arc::new(AtomicBool::new(false));
+    NEEDS_REFRESH.set(needs_refresh.clone()).unwrap();
+
     thread::spawn(move || {
         let db = Database::new("clipboard.db", "pwd").expect("Failed to init DB");
-        
         while let Ok(msg) = rx.recv() {
             let _ = db.save_snapshot(
                 &msg.owner,
@@ -215,7 +217,6 @@ fn main() -> Result<()> {
                 lpfnWndProc: Some(wnd_proc),
                 ..Default::default()
             };
-
             RegisterClassExW(&wc);
 
             let _hwnd = CreateWindowExW(
@@ -231,13 +232,8 @@ fn main() -> Result<()> {
             );
 
             AddClipboardFormatListener(_hwnd).expect("failed to add clipboard listener");
-
-            RegisterHotKey(
-                _hwnd,
-                HOTKEY_ID,
-                MOD_CONTROL | MOD_ALT,
-                VK_C.0 as u32,
-            ).expect("failed to register hotkey");
+            RegisterHotKey(_hwnd, HOTKEY_ID, MOD_CONTROL | MOD_ALT, VK_C.0 as u32)
+                .expect("failed to register hotkey");
 
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, HWND(0), 0, 0).into() {
@@ -251,7 +247,7 @@ fn main() -> Result<()> {
     eframe::run_native(
         "Clip",
         native_options,
-        Box::new(|cc| Box::new(App::new(cc, visible))),
+        Box::new(|cc| Box::new(App::new(cc, visible, needs_refresh))),
     ).expect("eframe failure");
 
     Ok(())

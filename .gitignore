@@ -1,4 +1,4 @@
 /target
 Cargo.lock
-clipboard.db
+*.db
 .cargo
