@@ -2,6 +2,7 @@ use eframe::egui;
 use crate::models::*;
 use crate::storage::*;
 use crate::{OpenClipboard, HWND, EmptyClipboard, GlobalAlloc, GMEM_MOVEABLE, GlobalLock, GlobalUnlock, SetClipboardData, HANDLE, CloseClipboard};
+use std::collections::HashMap;
 
 pub struct App {
     history: Vec<ClipSummary>,
@@ -11,6 +12,7 @@ pub struct App {
     total_count: i32,
     visible: std::sync::Arc<std::sync::atomic::AtomicBool>,
     last_visible: bool,
+    image_cache: HashMap<String, egui::TextureHandle>,
 }
 
 impl App {
@@ -27,6 +29,7 @@ impl App {
             total_count: 0,
             visible,
             last_visible: true,
+            image_cache: HashMap::new(),
         };
 
         app.refresh_history();
@@ -45,6 +48,8 @@ impl App {
                 self.history = latest;
             }
         }
+       //clear image cache to free memory when refreshing history
+        self.image_cache.clear();
     }
 
     pub fn clear_history(&mut self) {

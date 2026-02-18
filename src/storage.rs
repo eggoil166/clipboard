@@ -85,23 +85,31 @@ impl Database {
     pub fn get_latest_clips(&self, limit: i32, offset: i32) -> rusqlite::Result<Vec<ClipSummary>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, timestamp, owner_process_name, foreground_window_title, content_hash,
-            (SELECT data FROM formats WHERE clip_id = clips.id AND (format_id = 13 OR format_id = 1) LIMIT 1) as preview
+            (SELECT data FROM formats WHERE clip_id = clips.id AND (format_id = 13 OR format_id = 1) LIMIT 1) as preview,
+            (SELECT 1 FROM formats WHERE clip_id = clips.id AND (format_id = 8 OR format_id = 17) LIMIT 1) as has_image
             FROM clips ORDER BY timestamp DESC LIMIT ? OFFSET ?"
         )?;
 
         let rows = stmt.query_map([limit, offset], |row| {
             let raw_data: Option<Vec<u8>> = row.get(5)?;
-            let preview = match raw_data {
-                Some(bytes) => {
-                    if let Ok(utf16_str) = String::from_utf16(&bytes.chunks_exact(2)
-                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                        .collect::<Vec<u16>>()) {
-                        utf16_str.chars().take(50).collect()
-                    } else {
-                        String::from_utf8_lossy(&bytes).chars().take(50).collect()
+            let has_image: Option<i32> = row.get(6)?;
+            let is_image = has_image.is_some();
+            
+            let preview = if is_image {
+                "[IMAGE]".to_string()
+            } else {
+                match raw_data {
+                    Some(bytes) => {
+                        if let Ok(utf16_str) = String::from_utf16(&bytes.chunks_exact(2)
+                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                            .collect::<Vec<u16>>()) {
+                            utf16_str.chars().take(50).collect()
+                        } else {
+                            String::from_utf8_lossy(&bytes).chars().take(50).collect()
+                        }
                     }
+                    None => "bins".to_string(),
                 }
-                None => "bins".to_string(),
             };
 
             Ok(ClipSummary {
@@ -110,6 +118,7 @@ impl Database {
                 fg_title: row.get(3)?,
                 hash: row.get(4)?,
                 preview,
+                is_image,
             })
         })?;
 

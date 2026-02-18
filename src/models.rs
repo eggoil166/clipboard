@@ -18,4 +18,5 @@ pub struct ClipSummary {
     pub fg_title: String,
     pub preview: String,
     pub hash: String,
+    pub is_image: bool,
 }
